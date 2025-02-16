@@ -1,0 +1,11 @@
+requests
+beautifulsoup4
+lxml
+numpy
+pandas
+selenium
+webdriver-manager
+pytest
+mysql-connector-python
+python-dotenv
+streamlit

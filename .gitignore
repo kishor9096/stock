@@ -1,0 +1,11 @@
+*.db
+.env
+__pycache__/
+data/
+.venv/
+.vscode/
+*.pyc
+*.pyo
+*.pyd
+*.out
+cron_log.txt
