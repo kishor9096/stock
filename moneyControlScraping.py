@@ -7,101 +7,201 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.firefox import GeckoDriverManager
 import time
 import mysql.connector
-from datetime import datetime
 from dotenv import load_dotenv
 import os
+import re
+import platform
+from webdriver_manager.chrome import ChromeDriverManager
 
 # Load environment variables from .env file
 load_dotenv()
 
-def max_pain(index):
+def extract_stock_data(driver):
+    """Extracts stock details from each card on the technical picks page."""
+    try:
+        # Wait for the elements to be present
+        wait = WebDriverWait(driver, 10)
+        cards = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".technical-picks-card")))
+        stock_data = []
+        print("Extracting stock data from cards :: " +str(cards.count()))
+        
+        for card in cards:
+            # Extract stock name and other relevant details
+            stock_details = {}
 
-	# Set up Firefox options
-	firefox_options = Options()
-	firefox_options.add_argument("--headless")  # Run in headless mode
-	firefox_options.add_argument("--no-sandbox")
-	firefox_options.add_argument("--disable-dev-shm-usage")
+            try:
+                stock_name_element = card.find_element(By.CSS_SELECTOR, ".stock-name")
+                stock_details["stock_name"] = stock_name_element.text.strip()
+            except Exception as e:
+                print(f"Error extracting stock name: {e}")
+                stock_details["stock_name"] = ""  # Handle missing details
 
-	# Set up the WebDriver
-	geckodriver_path = "/snap/bin/geckodriver"  # Manually specify the path to geckodriver
-	service = Service(geckodriver_path)
-	driver = webdriver.Firefox(service=service, options=firefox_options)
+            try:
+                stock_code_element = card.find_element(By.CSS_SELECTOR, ".stock-code")
+                stock_details["stock_code"] = stock_code_element.text.strip()
+            except Exception as e:
+                print(f"Error extracting stock code: {e}")
+                stock_details["stock_code"] = ""
 
-	# Navigate to the Sensibull website
-	url = "https://web.sensibull.com/futures-options-data?tradingsymbol="+index
-	driver.get(url)
+            try:
+                recommendation_date_element = card.find_element(By.CSS_SELECTOR, ".recommendation-date")
+                stock_details["recommendation_date"] = recommendation_date_element.text.strip()
+            except Exception as e:
+                print(f"Error extracting recommendation date: {e}")
+                stock_details["recommendation_date"] = ""
 
-	# Example: Locate and extract data (modify selectors as needed)
-	# Assuming we want to extract some data from the homepage
-	try:
-		# Wait for the element to be present
-		wait = WebDriverWait(driver, 10)
-		instrument_ltp_element = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//span[@class='instrument-ltp']")))
-		if(instrument_ltp_element[0].text.strip() == "--"):
-			time.sleep(2)
-		instrument_ltp = instrument_ltp_element[0].text.strip()
-		elements = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//div[@dir='ltr']/descendant::button")))
-		# iterate on each date button and if data-state="active" then fetch the max pain data else click on the button and then fetch the max pain data"
-		for element in elements:
-			if element.get_attribute("data-state") == "active":
-				expiryDate = element.text
-				print("Extracted Date:", expiryDate)
-				element = wait.until(EC.presence_of_element_located((By.XPATH, "//p[text()='Max pain']/following-sibling::*")))
-				data = element.text
-				print("Extracted Data:", data)
-				insert_data(expiryDate, data, index,instrument_ltp)
-			else:
-				element.click()
-				time.sleep(2)
-				expiryDate = element.text
-				print("Extracted Date:", expiryDate)
-				element = wait.until(EC.presence_of_element_located((By.XPATH, "//p[text()='Max pain']/following-sibling::*")))
-				data = element.text
-				print("Extracted Data:", data)
-				insert_data(expiryDate, data, index,instrument_ltp)
-	except Exception as e:
-		print("An error occurred:", e)
+            # Extract numerical data (prices) using more robust parsing
+            for key in ["entry_price", "stoploss_price", "target_price", "current_price"]:
+                try:
+                    price_element = card.find_element(By.CSS_SELECTOR, f".{key.replace('_', '-')}")
+                    price_text = price_element.text.strip()
+                    price = float(re.sub(r"[^0-9.]", "", price_text))  # Remove non-numeric characters
+                    stock_details[key] = price
+                except Exception as e:
+                    print(f"Error extracting {key}: {e}")
+                    stock_details[key] = float('nan')  # Indicate missing data
 
-	# Close the WebDriver
-	driver.quit()
+            stock_data.append(stock_details)
 
-def insert_data(expiry_date, max_pain,index,instrument_ltp):
-	try:
-		# Convert expiry_date to DATE format
-		#expiry_date = datetime.strptime(expiry_date, '%d-%b-%Y').date()
-		
-		connection = mysql.connector.connect(
-			host=os.getenv('DB_HOST'),
-			port=os.getenv('DB_PORT'),
-			user=os.getenv('DB_USER'),
-			password=os.getenv('DB_PASSWORD'),
-			database=os.getenv('DB_NAME')
-		)
-		max_pain_price = max_pain.split("\n")[0].strip()
-		max_pain_trend = max_pain.split("\n")[1].strip()
-		index_price_close = instrument_ltp.strip()
-		cursor = connection.cursor()
-		query = "INSERT INTO max_pain_data (expiry_date, max_pain, index_name, index_price_close, max_pain_trend, max_pain_price) VALUES (%s, %s,%s,%s, %s,%s)"
-		cursor.execute(query, (expiry_date, max_pain, index,index_price_close, max_pain_trend, max_pain_price))
-		connection.commit()
-		cursor.close()
-		connection.close()
-	except mysql.connector.Error as err:
-		print("Error: {}".format(err))
+        return stock_data
+    except Exception as e:
+        print(f"An error occurred while extracting stock data: {e}")
+        return []
+
+
+def login_and_extract_data(username, password):
+    """Logs in to Moneycontrol and extracts stock data."""
+    try:
+        if platform.system() == "Windows":
+            # Use Chrome on Windows
+            driver = webdriver.Chrome(service=webdriver.ChromeService(ChromeDriverManager().install()))
+            print("Using Chrome on Windows")
+        elif platform.system() == "Linux":
+            # Use Firefox on Linux (Ubuntu)
+            firefox_options = webdriver.FirefoxOptions()
+            firefox_options.add_argument("--headless")
+            firefox_options.add_argument("--no-sandbox")
+            firefox_options.add_argument("--disable-dev-shm-usage")
+            geckodriver_path = "/snap/bin/geckodriver"
+            service = Service(geckodriver_path)
+            driver = webdriver.Firefox(service=service, options=firefox_options)
+            print("Using Firefox on Linux")
+        else:
+            print("Unsupported operating system.")
+            return False
+
+        # Navigate to the Moneycontrol login page
+        driver.get("https://www.moneycontrol.com/")
+        login_button = driver.find_element(By.XPATH, "//div[@class='user_before_login blp']/a[@class='userlink']")
+        login_button.click()
+        time.sleep(2) #Added a small delay to ensure page load
+        
+
+        # Find and fill login form fields (adjust selectors as needed)
+        username_field = driver.find_element(By.ID, "username")
+        password_field = driver.find_element(By.ID, "password")
+        username_field.send_keys(username)
+        password_field.send_keys(password)
+        login_button = driver.find_element(By.XPATH, "//button[@type='submit']")
+        login_button.click()
+        wait = WebDriverWait(driver, 10)
+        try:
+            login_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a.btn_signin.linkSignIn")))
+            login_button.click()
+        except Exception as e:
+            print(f"Error clicking login button: {e}")
+            return False
+
+        time.sleep(2)  #Added a small delay to ensure page load
+        login_button = wait.until(EC.element_to_be_clickable((By.XPATH, "//li[@class='signup_ctc' and @data-target='#mc_login']")))
+        login_button.click()
+        time.sleep(2) #Added a small delay to ensure page load
+
+        # Find and fill login form fields (adjust selectors as needed)
+        username_field = driver.find_element(By.Name, "email")
+        password_field = driver.find_element(By.Name, "pwd")
+        username_field.send_keys(username)
+        password_field.send_keys(password)
+        login_button = driver.find_element(By.XPATH, "//button[@type='button' and @class='continue login_verify_btn']")
+        login_button.click()
+        #Added wait to ensure page load
+        time.sleep(5)
+        
+        # Wait for the technical picks page to load
+        driver.get("https://www.moneycontrol.com/technical-picks/")
+        time.sleep(5)  # Add a delay to allow page to load
+
+        stock_data = extract_stock_data(driver)
+
+        # Insert data into the database
+        insert_stock_data_to_db(stock_data)
+
+        driver.quit()
+        return True
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        if driver:
+            driver.quit()
+        return False
+
+
+def insert_stock_data_to_db(stock_data):
+    """Inserts stock data into the MySQL database.  Updates the table schema."""
+    try:
+        connection = mysql.connector.connect(
+            host=os.getenv('DB_HOST'),
+            port=int(os.getenv('DB_PORT')),
+            user=os.getenv('DB_USER'),
+            password=os.getenv('DB_PASSWORD'),
+            database=os.getenv('DB_NAME')
+        )
+        cursor = connection.cursor()
+
+        # Create table if it doesn't exist, or update the schema
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS stock_data (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                stock_name VARCHAR(255),
+                stock_code VARCHAR(255),
+                recommendation_date DATE,
+                entry_price DECIMAL(10, 2),
+                stoploss_price DECIMAL(10, 2),
+                target_price DECIMAL(10, 2),
+                current_price DECIMAL(10, 2),
+                source VARCHAR(255) DEFAULT 'Other'
+            )
+        """)
+
+        for stock in stock_data:
+            values = (
+                stock.get('stock_name', ''),
+                stock.get('stock_code', ''),
+                stock.get('recommendation_date', None),
+                stock.get('entry_price', float('nan')),
+                stock.get('stoploss_price', float('nan')),
+                stock.get('target_price', float('nan')),
+                stock.get('current_price', float('nan'))
+            )
+            cursor.execute("""
+                INSERT INTO stock_data (stock_name, stock_code, recommendation_date, entry_price, stoploss_price, target_price, current_price, source)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, values + ('MoneyControl',))  # Add 'MoneyControl' as the source
+
+        connection.commit()
+        cursor.close()
+        connection.close()
+        print("Stock data inserted successfully.")
+
+    except mysql.connector.Error as err:
+        print(f"Error inserting data into database: {err}")
 
 if __name__ == "__main__":
-	print("started : ", time.ctime())
-	max_pain("NIFTY")
-	print("ended : ", time.ctime())
-	print("started : ", time.ctime())
-	max_pain("BANKNIFTY")
-	print("ended : ", time.ctime())
-	print("started : ", time.ctime())
-	max_pain("SENSEX")
-	print("ended : ", time.ctime())
-	print("started : ", time.ctime())
-	max_pain("FINNIFTY")
-	print("ended : ", time.ctime())
-	print("started : ", time.ctime())
-	max_pain("MIDCPNIFTY")
-	print("ended : ", time.ctime())
+    username = os.getenv('MONEYCONTROL_USERNAME')
+    password = os.getenv('MONEYCONTROL_PASSWORD')
+
+    if username and password:
+        if login_and_extract_data(username, password):
+            print("Data extraction and insertion completed successfully.")
+    else:
+        print("Username or password not found in .env file.")
