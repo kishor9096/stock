@@ -9,3 +9,4 @@ data/
 *.pyd
 *.out
 cron_log.txt
+moneyControlScraping_cron_log.txt
