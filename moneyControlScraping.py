@@ -173,7 +173,7 @@ def login_and_extract_data(username, password,apiUrl):
             option_category VARCHAR(255),
             meta_data TEXT,
             reco_end_date DATETIME,
-            updated_at DATETIME,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             created_at DATETIME,
             user_name VARCHAR(255),
             call_status VARCHAR(255),
@@ -225,10 +225,24 @@ def login_and_extract_data(username, password,apiUrl):
 def insert_stock_data_to_db(stock_data,cursor):
     # Insert data if ID does not exist
     try:
-        stock_data['reco_end_date'] = datetime.fromisoformat(stock_data['reco_end_date'].replace('Z', '+00:00'))
-        stock_data['updated_at'] = datetime.fromisoformat(stock_data['updated_at'])
-        stock_data['created_at'] = datetime.fromisoformat(stock_data['created_at'])
-        stock_data['closed_on_dt'] = datetime.min if stock_data['closed_on_dt'] == "0001-11-30 00:00:00" else datetime.fromisoformat(stock_data['closed_on_dt'])
+        try:
+            stock_data['reco_end_date'] = datetime.fromisoformat(stock_data['reco_end_date'].replace('Z', '+00:00'))
+        except ValueError as e:
+            print(f"Error parsing reco_end_date: {e}, stock_data: {stock_data}")
+            stock_data['reco_end_date'] = None  # Handle invalid format
+
+        try:
+            stock_data['created_at'] = datetime.fromisoformat(stock_data['created_at'])
+        except ValueError as e:
+            print(f"Error parsing created_at: {e}, stock_data: {stock_data}")
+            stock_data['created_at'] = None
+
+        stock_data['closed_on_dt'] = str(datetime.now())
+        try:
+            stock_data['closed_on_dt'] = datetime.fromisoformat(stock_data['closed_on_dt']) if stock_data['closed_on_dt'] is not None else None
+        except ValueError as e:
+            print(f"Error parsing closed_on_dt: {e}, stock_data: {stock_data}")
+            stock_data['closed_on_dt'] = None
         cursor.execute('''SELECT id, call_status FROM recommendations WHERE id = %s''', (stock_data['id'],))
         result = cursor.fetchone()
         if result:
@@ -241,15 +255,15 @@ def insert_stock_data_to_db(stock_data,cursor):
                 cursor.execute('''SELECT id FROM portfolio WHERE recommendation_id = %s''', (stock_data['id'],))
                 portfolio_id_result = cursor.fetchone()
                 if portfolio_id_result:
-                    cursor.execute('''UPDATE portfolio SET exit_price = %s, exit_date = NOW() WHERE recommendation_id = %s''', (stock_data['cmp'], stock_data['id']))
+                    cursor.execute('''UPDATE portfolio SET exit_price = %s, exit_date = NOW(), realized_profit = (quantity * (%s - (SELECT entry_price FROM portfolio WHERE recommendation_id = %s))) WHERE recommendation_id = %s''', (stock_data['cmp'], stock_data['cmp'], stock_data['id'], stock_data['id']))
             
             
         else:
             cursor.execute('''
-            INSERT INTO recommendations (id, asset_class, instrument_type, instrument, reco_type, option_category, meta_data, reco_end_date, updated_at, created_at, user_name, call_status, cmp, entry_condition, entry_price, target_condition, target_price_1, stoploss_price, target_return, stoploss_condition, rationale, closed_on_dt)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO recommendations (id, asset_class, instrument_type, instrument, reco_type, option_category, meta_data, reco_end_date, created_at, user_name, call_status, cmp, entry_condition, entry_price, target_condition, target_price_1, stoploss_price, target_return, stoploss_condition, rationale, closed_on_dt)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ''', (stock_data['id'], stock_data['asset_class'], stock_data['instrument_type'], stock_data['instrument'], stock_data['reco_type'], stock_data['option_category'], stock_data['meta_data'], 
-            stock_data['reco_end_date'], stock_data['updated_at'], stock_data['created_at'], stock_data['user_name'], stock_data['call_status'], stock_data['cmp'], stock_data['entry_condition'], 
+            stock_data['reco_end_date'], stock_data['created_at'], stock_data['user_name'], stock_data['call_status'], stock_data['cmp'], stock_data['entry_condition'], 
             stock_data['entry_price'], stock_data['target_condition'], stock_data['target_price_1'], stock_data['stoploss_price'], stock_data['target_return'], stock_data['stoploss_condition'], 
             stock_data['rationale'], stock_data['closed_on_dt']))
             # Insert into portfolio table
@@ -272,13 +286,12 @@ def insert_stock_data_to_db(stock_data,cursor):
         try:
             headers = {'Content-type': 'application/json'}
             payload = {
-                'message': 'New recommendation identified \n Stock Name: ' + stock_data['instrument'] + '\n Recommendation Type: ' + stock_data['reco_type'] + '\n Entry Price: ' + str(stock_data['entry_price'])+ '\n Entry Time: ' + str(stock_data['created_at']),
-                'details': stock_data
+                'message': f"New recommendation identified \n Stock Name: {stock_data['sc_symbol']} \n Recommendation Type: {stock_data['reco_type']} \n Entry Price: {stock_data['entry_price']} \n Entry Time: {stock_data['created_at']} \n Target Price: {stock_data['target_price_1']}"
             }
-            response = requests.post('http://localhost:8080/webhook', headers=headers, data=json.dumps(payload))
+            response = requests.post('http://140.245.31.82:8080/webhook', headers=headers, data=json.dumps(payload))
             if response.status_code != 200:
                 print(f"Error sending webhook request: {response.status_code}, {response.text}")
-        except requests.exceptions.RequestException as e:
+        except Exception as e:
             print(f"Error sending webhook request: {e}")
         # Commit changes
         # connection.commit()
@@ -292,7 +305,7 @@ def insert_stock_data_to_db(stock_data,cursor):
         # stock_data['entry_price'], stock_data['target_condition'], stock_data['target_price_1'], stock_data['stoploss_price'], stock_data['target_return'], stock_data['stoploss_condition'], 
         # stock_data['rationale'], stock_data['closed_on_dt'],stock_data['id']))
 
-    except mysql.connector.Error as err:
+    except Exception as err:
         print(f"Error inserting data into database: {err}")
 
 if __name__ == "__main__":
