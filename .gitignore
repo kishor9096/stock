@@ -10,3 +10,4 @@ data/
 *.out
 cron_log.txt
 moneyControlScraping_cron_log.txt
+max_pain_sensibull_cron_log.txt
