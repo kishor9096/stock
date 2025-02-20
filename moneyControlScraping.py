@@ -15,7 +15,6 @@ import re
 import platform
 from webdriver_manager.chrome import ChromeDriverManager
 import requests
-
 # Load environment variables from .env file
 load_dotenv()
 
@@ -268,6 +267,19 @@ def insert_stock_data_to_db(stock_data,cursor):
             INSERT INTO portfolio (instrument, entry_price, entry_date, quantity, recommendation_id, buy_sell)
             VALUES (%s, %s, %s, 1, %s, 'buy')
             ''', (stock_data['sc_symbol'], stock_data['entry_price'],stock_data['created_at'], stock_data['id']))
+        
+
+        try:
+            headers = {'Content-type': 'application/json'}
+            payload = {
+                'message': 'New recommendation identified \n Stock Name: ' + stock_data['instrument'] + '\n Recommendation Type: ' + stock_data['reco_type'] + '\n Entry Price: ' + str(stock_data['entry_price'])+ '\n Entry Time: ' + str(stock_data['created_at']),
+                'details': stock_data
+            }
+            response = requests.post('http://localhost:8080/webhook', headers=headers, data=json.dumps(payload))
+            if response.status_code != 200:
+                print(f"Error sending webhook request: {response.status_code}, {response.text}")
+        except requests.exceptions.RequestException as e:
+            print(f"Error sending webhook request: {e}")
         # Commit changes
         # connection.commit()
         
