@@ -1,7 +1,8 @@
+import time
 import os
+from datetime import datetime
 import mysql.connector
 import dotenv
-import yfinance as yf
 import requests
 from bs4 import BeautifulSoup
 import platform
@@ -56,7 +57,7 @@ def update_stock_prices():
         mycursor = mydb.cursor()
 
         # Replace 'your_query' with your actual query
-        mycursor.execute("SELECT instrument FROM portfolio")
+        mycursor.execute("SELECT instrument FROM portfolio WHERE exit_date IS NULL")
         instruments = mycursor.fetchall()
     
         for instrument in instruments:
@@ -81,6 +82,8 @@ def update_stock_prices():
         print(f"Error connecting to MySQL database: {err}")
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
+        if driver:
+            driver.quit()
 
 
 def get_latest_price(instrument_name,driver):
@@ -91,12 +94,18 @@ def get_latest_price(instrument_name,driver):
     try:
         url = f"https://www.tradingview.com/symbols/NSE-{instrument_name}/"
         driver.get(url)
-        elementBy = By.XPATH("//div[contains(@class, 'symbol-header-ticker')]//descendant::span[contains(@class, 'symbol-last")
-        WebDriverWait(driver, 10).until(EC.presence_of_all_elements_located((By.XPATH, elementBy)))
-        price_element = driver.find_element(By.XPATH, elementBy)
+        driver.maximize_window()
+        time.sleep(2)
+        price_element = driver.find_elements(By.XPATH, "//div[contains(@class, 'symbol-header-ticker')]//descendant::span[contains(@class, 'symbol-last')]")
 
         if price_element:
-            latest_price = float(price_element.text.replace(",", ""))
+            try:
+                latest_price = float(price_element[0].text.replace(",", ""))
+            except:
+                driver.get(url)
+                time.sleep(5)
+                price_element = driver.find_elements(By.XPATH, "//div[contains(@class, 'symbol-header-ticker')]//descendant::span[contains(@class, 'symbol-last')]")
+                latest_price = float(price_element[0].text.replace(",", ""))
             return latest_price
         else:
             print(f"Could not find price element for {instrument_name} on TradingView.")
@@ -107,7 +116,57 @@ def get_latest_price(instrument_name,driver):
     except (ValueError, AttributeError) as e:
         print(f"Error parsing price for {instrument_name}: {e}")
         return None
+    except Exception as e:
+        print(f"An unexpected error occurred while fetching price for {instrument_name}: {e}")
+        return None
+
+
+def update_stock_exit_date():
+    mydb = mysql.connector.connect(
+        host=os.getenv('DB_HOST'),
+        port=int(os.getenv('DB_PORT')),
+        user=os.getenv('DB_USER'),
+        password=os.getenv('DB_PASSWORD'),
+        database=os.getenv('DB_NAME')
+    )
+    mycursor = mydb.cursor()
+
+    try:
+        mycursor.execute("SELECT id, instrument,current_price,entry_price,quantity FROM portfolio WHERE exit_date IS NULL")
+        stocks_to_check = mycursor.fetchall()
+
+        for (portfolio_id, instrument_name,ltp,entry_price,quantity) in stocks_to_check:
+            try:
+                mycursor.execute("SELECT target_price_1, stoploss_price FROM recommendations WHERE id = (SELECT recommendation_id FROM portfolio WHERE id = %s)", (portfolio_id,))
+                recommendation_data = mycursor.fetchone()
+
+                if recommendation_data:
+                    target_price = recommendation_data[0]
+                    stoploss_price = recommendation_data[1]
+                    latest_price = ltp
+
+                    if latest_price is not None:
+                        profit = (latest_price - entry_price)*quantity
+
+                        if target_price and latest_price >= target_price:
+                            print(f"Target price reached for {instrument_name} (portfolio_id: {portfolio_id}). Updating exit_date.")
+                            mycursor.execute("UPDATE portfolio SET exit_date = %s, exit_price = %s, realized_profit = %s WHERE id = %s", (datetime.now(), latest_price, profit, portfolio_id))
+                            mydb.commit()
+                        elif stoploss_price and latest_price <= stoploss_price:
+                            print(f"Stop loss triggered for {instrument_name} (portfolio_id: {portfolio_id}). Updating exit_date.")
+                            mycursor.execute("UPDATE portfolio SET exit_date = %s, exit_price = %s, realized_profit = %s WHERE id = %s", (datetime.now(), latest_price, profit, portfolio_id))
+                            mydb.commit()
+                    else:
+                        print(f"Could not fetch latest price for {instrument_name}. Skipping.")
+            except mysql.connector.Error as e:
+                print(f"Error updating portfolio data for {instrument_name}: {e}")
+            except Exception as e:
+                print(e)
+    except Exception as e:
+        print(e)
+
 
 
 if __name__ == "__main__":
     update_stock_prices()
+    update_stock_exit_date()
