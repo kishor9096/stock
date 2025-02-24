@@ -9,3 +9,4 @@ pytest
 mysql-connector-python
 python-dotenv
 streamlit
+yfinance
